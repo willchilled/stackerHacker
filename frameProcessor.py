@@ -10,6 +10,7 @@ def angle_cos(p0, p1, p2):
 
 
 def find_squares(img, square_area):
+    # TODO Work out how to stop contours matching over each other
     img = cv.GaussianBlur(img, (5, 5), 0)
     squares = []
     for gray in cv.split(img):
@@ -23,7 +24,7 @@ def find_squares(img, square_area):
             for cnt in contours:
                 cnt_len = cv.arcLength(cnt, True)
                 cnt = cv.approxPolyDP(cnt, APPROX_POLY_DP_ERROR * cnt_len, True)
-                if len(cnt) == 4 and cv.contourArea(cnt) > square_area and cv.isContourConvex(cnt):
+                if len(cnt) == 4 and cv.contourArea(cnt) > square_area * 0.9 and cv.isContourConvex(cnt):
                     cnt = cnt.reshape(-1, 2)
                     max_cos = np.max([angle_cos(cnt[i], cnt[(i + 1) % 4], cnt[(i + 2) % 4]) for i in range(4)])
                     if max_cos < 0.1:
@@ -56,7 +57,7 @@ class FrameProcessor:
             M = cv.moments(square)
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
-            cv.circle(closing, (cX, cY), 7, (0, 0, 255), -1)
+            cv.circle(closing, (cX, cY), 5, (0, 0, 255), -1)
             centres.append((cX, cY))
 
         return closing, squares, centres
