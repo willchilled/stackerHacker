@@ -11,22 +11,6 @@ UPPER_BLUE = np.array([253, 255, 244])  # Lighter teal (almost white!)
 SQUARE_SIZE = 2000
 
 
-def check_game_begun(centres, average_square_width):
-    centres = list(map(lambda x: np.array(x), centres))
-    # Returns true if every centre is at least within 10% diff of the avg square width from another centre
-    return all(any(
-        abs(np.linalg.norm(centres[j] - centres[i])) < 0.1 * average_square_width for j in range(i + 1, len(centres)))
-               for i in range(len(centres) - 1))
-
-
-def init_game():
-    pass
-
-
-def find_top_tower_cols(frame):
-    pass
-
-
 class StackerController:
 
     def __init__(self, input_cam):
@@ -41,11 +25,12 @@ class StackerController:
         ret, self.frame_1 = self.cam.read()
         self.display_frame = self.frame_1
 
+        self.square_contours = []
+
     def run(self):
         while self.cam.isOpened():
 
             if self.game_state.stage == Stage.PREGAME:
-                # frame = self.fp.colour_segment(self.frame_1)
                 frame = self.fp.frame_diff(self.frame_0, self.frame_1)
                 self.display_frame, squares, centres = self.fp.detect_squares(frame)
 
@@ -61,14 +46,20 @@ class StackerController:
                         self.has_init = True
 
                 # If we have initialised now check if the game has begun
-                elif self.has_init and check_game_begun(centres, self.avg_sq_width):
+                elif self.has_init and self.game_state.check_game_begun(centres, self.avg_sq_width):
                     self.game_state.stage = Stage.PLAYING
                     print("We playing now!")
 
             elif self.game_state.stage == Stage.PLAYING:
                 frame = self.fp.frame_diff(self.frame_0, self.frame_1)
                 self.display_frame, squares, centres = self.fp.detect_squares(frame, True)
-                tower_cols = find_top_tower_cols(self.display_frame)
+                self.display_frame = cv.cvtColor(self.display_frame, cv.COLOR_GRAY2BGR)
+                self.display_frame = cv.drawContours(self.display_frame, self.square_contours, -1, (255, 0, 0), 3)
+                self.display_frame = cv.drawContours(self.display_frame, squares, -1, (0, 0, 255), 4)
+                self.square_contours += squares
+
+                if self.game_state.tower_height == 0:
+                    pass
 
             self.frame_1 = self.frame_0
             ret, self.frame_0 = self.cam.read()

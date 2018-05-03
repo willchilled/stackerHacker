@@ -20,6 +20,9 @@ def is_square(cnt, square_area=2000, tight_match=False):
 def find_squares(img, square_area=2000, tight_match=False):
     # TODO Work out how to stop contours matching over each other
 
+    height, width = img.shape[:2]
+    blank_image = np.zeros((width, height), np.uint8)
+
     img = cv.GaussianBlur(img, (5, 5), 0)
     squares = []
     for gray in cv.split(img):
@@ -30,7 +33,16 @@ def find_squares(img, square_area=2000, tight_match=False):
             else:
                 _retval, bin = cv.threshold(gray, thrs, 255, cv.THRESH_BINARY)
             bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+
             for cnt in contours:
+
+                # Check if the contour is overlapping with another, if so do not continue processing
+                if any(blank_image[i, j] for i, j in cnt[0]):
+                    continue
+                else:
+                    for i, j in cnt[0]:
+                        blank_image[i, j] = 1
+
                 cnt_len = cv.arcLength(cnt, True)
                 cnt = cv.approxPolyDP(cnt, APPROX_POLY_DP_ERROR * cnt_len, True)
                 if is_square(cnt, square_area, tight_match):
