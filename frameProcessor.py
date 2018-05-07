@@ -3,6 +3,7 @@ import numpy as np
 
 APPROX_POLY_DP_ERROR = 0.05
 BLOCK_TO_SCREEN_FACTOR = 70
+KERNEL = cv.getStructuringElement(cv.MORPH_RECT, (4, 4))
 
 
 def angle_cos(p0, p1, p2):
@@ -20,9 +21,6 @@ def is_square(cnt, square_area=2000, tight_match=False):
 def find_squares(img, square_area=2000, tight_match=False):
     # TODO Work out how to stop contours matching over each other
 
-    height, width = img.shape[:2]
-    blank_image = np.zeros((width, height), np.uint8)
-
     img = cv.GaussianBlur(img, (5, 5), 0)
     squares = []
     for gray in cv.split(img):
@@ -32,17 +30,12 @@ def find_squares(img, square_area=2000, tight_match=False):
                 bin = cv.dilate(bin, None)
             else:
                 _retval, bin = cv.threshold(gray, thrs, 255, cv.THRESH_BINARY)
-            bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+            if tight_match:
+                bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+            else:
+                bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
 
             for cnt in contours:
-
-                # Check if the contour is overlapping with another, if so do not continue processing
-                if any(blank_image[i, j] for i, j in cnt[0]):
-                    continue
-                else:
-                    for i, j in cnt[0]:
-                        blank_image[i, j] = 1
-
                 cnt_len = cv.arcLength(cnt, True)
                 cnt = cv.approxPolyDP(cnt, APPROX_POLY_DP_ERROR * cnt_len, True)
                 if is_square(cnt, square_area, tight_match):
@@ -59,6 +52,7 @@ class FrameProcessor:
         self.lower_blue = lower_blue
         self.upper_blue = upper_blue
         self.square_size = square_size
+        self.r_angle = -2
 
     def colour_segment(self, frame):
         mask = cv.inRange(frame, self.lower_blue, self.upper_blue)
@@ -68,7 +62,6 @@ class FrameProcessor:
 
     def detect_squares(self, frame, tight_match=False):
         squares = find_squares(frame, self.square_size, tight_match)
-        cv.drawContours(frame, squares, -1, (255, 0, 0), 3)
 
         # Compute the center of each square and draw
         centres = []
@@ -76,10 +69,9 @@ class FrameProcessor:
             M = cv.moments(square)
             cX = int(M["m10"] / M["m00"])
             cY = int(M["m01"] / M["m00"])
-            cv.circle(frame, (cX, cY), 5, (0, 0, 255), -1)
             centres.append((cX, cY))
 
-        return frame, squares, centres
+        return squares, centres
 
     def frame_diff(self, frame1, frame2):
         img1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
@@ -88,4 +80,31 @@ class FrameProcessor:
         diff = cv.subtract(img1, img2)
 
         return diff
+
+    def rotate_frame(self, frame):
+        # grab the dimensions of the image and then determine the
+        # center
+        (h, w) = frame.shape[:2]
+        (cX, cY) = (w // 2, h // 2)
+
+        # grab the rotation matrix (applying the negative of the
+        # angle to rotate clockwise), then grab the sine and cosine
+        # (i.e., the rotation components of the matrix)
+        M = cv.getRotationMatrix2D((cX, cY), -self.r_angle, 1.0)
+        cos = np.abs(M[0, 0])
+        sin = np.abs(M[0, 1])
+
+        # compute the new bounding dimensions of the image
+        nW = int((h * sin) + (w * cos))
+        nH = int((h * cos) + (w * sin))
+
+        # adjust the rotation matrix to take into account translation
+        M[0, 2] += (nW / 2) - cX
+        M[1, 2] += (nH / 2) - cY
+
+        # perform the actual rotation and return the image
+        return cv.warpAffine(frame, M, (nW, nH))
+
+    def morph_open(self, frame):
+        return cv.morphologyEx(frame, cv.MORPH_OPEN, KERNEL)
 
