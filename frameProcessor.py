@@ -4,6 +4,15 @@ import numpy as np
 APPROX_POLY_DP_ERROR = 0.05
 BLOCK_TO_SCREEN_FACTOR = 70
 KERNEL = cv.getStructuringElement(cv.MORPH_RECT, (4, 4))
+ROTATE_ANGLE = -2
+SQUARE_SIZE = 2000
+
+LOWER_BLUE = np.array([192, 206, 68])  # Darker teal
+UPPER_BLUE = np.array([253, 255, 244])  # Lighter teal (almost white!)
+RED = (0, 0, 255)
+BLUE = (255, 0, 0)
+GREEN = (0, 255, 0)
+ORANGE = (0, 102, 255)
 
 
 def angle_cos(p0, p1, p2):
@@ -46,65 +55,60 @@ def find_squares(img, square_area=2000, tight_match=False):
     return squares
 
 
-class FrameProcessor:
+def colour_segment(frame):
+    mask = cv.inRange(frame, LOWER_BLUE, UPPER_BLUE)
+    output = cv.bitwise_and(frame, frame, mask=mask)
 
-    def __init__(self, lower_blue, upper_blue, square_size):
-        self.lower_blue = lower_blue
-        self.upper_blue = upper_blue
-        self.square_size = square_size
-        self.r_angle = -2
+    return output
 
-    def colour_segment(self, frame):
-        mask = cv.inRange(frame, self.lower_blue, self.upper_blue)
-        output = cv.bitwise_and(frame, frame, mask=mask)
 
-        return output
+def detect_squares(frame, square_size=SQUARE_SIZE, tight_match=False):
+    squares = find_squares(frame, square_size, tight_match)
 
-    def detect_squares(self, frame, tight_match=False):
-        squares = find_squares(frame, self.square_size, tight_match)
+    # Compute the center of each square and draw
+    centres = []
+    for square in squares:
+        M = cv.moments(square)
+        cX = int(M["m10"] / M["m00"])
+        cY = int(M["m01"] / M["m00"])
+        centres.append((cX, cY))
 
-        # Compute the center of each square and draw
-        centres = []
-        for square in squares:
-            M = cv.moments(square)
-            cX = int(M["m10"] / M["m00"])
-            cY = int(M["m01"] / M["m00"])
-            centres.append((cX, cY))
+    return squares, centres
 
-        return squares, centres
 
-    def frame_diff(self, frame1, frame2):
-        img1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
-        img2 = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
+def frame_diff(frame1, frame2):
+    img1 = cv.cvtColor(frame1, cv.COLOR_BGR2GRAY)
+    img2 = cv.cvtColor(frame2, cv.COLOR_BGR2GRAY)
 
-        diff = cv.subtract(img1, img2)
+    diff = cv.subtract(img1, img2)
 
-        return diff
+    return diff
 
-    def rotate_frame(self, frame):
-        # grab the dimensions of the image and then determine the
-        # center
-        (h, w) = frame.shape[:2]
-        (cX, cY) = (w // 2, h // 2)
 
-        # grab the rotation matrix (applying the negative of the
-        # angle to rotate clockwise), then grab the sine and cosine
-        # (i.e., the rotation components of the matrix)
-        M = cv.getRotationMatrix2D((cX, cY), -self.r_angle, 1.0)
-        cos = np.abs(M[0, 0])
-        sin = np.abs(M[0, 1])
+def rotate_frame(frame, angle):
+    # grab the dimensions of the image and then determine the
+    # center
+    (h, w) = frame.shape[:2]
+    (cX, cY) = (w // 2, h // 2)
 
-        # compute the new bounding dimensions of the image
-        nW = int((h * sin) + (w * cos))
-        nH = int((h * cos) + (w * sin))
+    # grab the rotation matrix (applying the negative of the
+    # angle to rotate clockwise), then grab the sine and cosine
+    # (i.e., the rotation components of the matrix)
+    M = cv.getRotationMatrix2D((cX, cY), -angle, 1.0)
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
 
-        # adjust the rotation matrix to take into account translation
-        M[0, 2] += (nW / 2) - cX
-        M[1, 2] += (nH / 2) - cY
+    # compute the new bounding dimensions of the image
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
 
-        # perform the actual rotation and return the image
-        return cv.warpAffine(frame, M, (nW, nH))
+    # adjust the rotation matrix to take into account translation
+    M[0, 2] += (nW / 2) - cX
+    M[1, 2] += (nH / 2) - cY
 
-    def morph_open(self, frame):
-        return cv.morphologyEx(frame, cv.MORPH_OPEN, KERNEL)
+    # perform the actual rotation and return the image
+    return cv.warpAffine(frame, M, (nW, nH))
 
+
+def morph_open(frame):
+    return cv.morphologyEx(frame, cv.MORPH_OPEN, KERNEL)
