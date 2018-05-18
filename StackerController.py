@@ -1,48 +1,14 @@
 import cv2 as cv
 import numpy as np
+import datetime
 import time
 
 from frameProcessor import *
 from GameState import *
 from utils import *
-from scipy import ndimage
 
 STACKER_COLUMNS = 7
 STACKER_ROWS = 15
-
-DIVIDER_SIZE = 20
-
-def print_divider(message):
-
-    print("-" * DIVIDER_SIZE)
-    print(message)
-    print("-" * DIVIDER_SIZE)
-
-
-def get_highest_square(squares):
-    cnt, bounding_box = None, None
-    if squares:
-        boundingBoxes = [cv.boundingRect(c) for c in squares]
-        cnt, bounding_box = min(zip(squares, boundingBoxes), key=lambda x: x[1][1])
-    return cnt, bounding_box
-
-
-def get_leftmost_square(squares):
-    cnt, bounding_box = None, None
-    if squares:
-        boundingBoxes = [cv.boundingRect(c) for c in squares]
-        cnt, bounding_box = min(zip(squares, boundingBoxes), key=lambda x: x[1][0])
-    return cnt, bounding_box
-
-
-def get_avg_contour_color(frame, contour):
-    # TODO may have to convert frame to gray first
-    mask = np.zeros(frame.shape, np.uint8)
-    cv.drawContours(mask, [contour], 0, 255, -1)
-    mean_val = cv.mean(frame, mask=mask)
-
-    print("mean_val: ", mean_val)
-
 
 class StackerController:
 
@@ -64,6 +30,12 @@ class StackerController:
         self.square_contours, self.tower_squares = [], []
         self.last_sq, self.last_bb = None, None
 
+        self.sample_time = time.time()
+
+        # Velocity sampling times
+        self.first_update_time = None
+        self.row_velocity = None
+
         # Camera Variables
         self.cam = cv.VideoCapture(input_cam)
         ret, self.frame_0 = self.cam.read()
@@ -76,106 +48,146 @@ class StackerController:
 
             # PREGAME
             if self.game_stage == Stage.PREGAME:
-                frame = frame_diff(self.frame_0, self.frame_1)
-                self.display_frame = morph_open(frame)
-                squares, centres = detect_squares(frame)
-
-                # If we haven't initialised and there are at least 5 contours to init off
-                if not self.avg_sq_width and len(centres) >= 3:
-                    avg_sq_width = get_average_box_width(squares)
-                    if avg_sq_width != -1:
-                        self.avg_sq_size = avg_sq_width * avg_sq_width
-                        self.avg_sq_width = avg_sq_width
-
-                        # TODO add in working out columns
-
-                        # TODO Work out rotation angle
-                        self.r_angle = -2
-
-                        # TODO work out block colours dynamically
-                        print("average_square_size", self.avg_sq_size)
-
-                # If we have initialised now check if the game has begun
-                elif self.avg_sq_width and check_game_begun(centres, self.avg_sq_width):
-                    self.game_stage = Stage.INIT
-                    print_divider("STAGE=INIT")
+                self.pregame_task()
 
             # INIT
             elif self.game_stage == Stage.INIT:
-                frame = frame_diff(self.frame_0, self.frame_1)
-                frame = morph_open(frame)
-                frame = rotate_frame(frame, self.r_angle)
-                squares, centres = detect_squares(frame, self.avg_sq_size, True)
-                square, bounding_b = get_leftmost_square(squares)
-
-                if bounding_b:
-                    if not self.left_most_bb:
-                        self.left_most_bb = bounding_b
-                    else:
-                        if bounding_b[0] - self.left_most_bb[0] > self.avg_sq_width / 2:  # Moving Right
-                            if self.is_moving_left:
-                                print("Found leftmost Square!: ", self.left_most_bb)
-                                print_divider("STAGE=PLAYING")
-                                self.current_row_height = self.left_most_bb[1]
-                                self.game_stage = Stage.PLAYING
-                            self.is_moving_left = False
-                        elif self.left_most_bb[0] - bounding_b[0] > self.avg_sq_width / 2:  # Moving Left
-                            self.is_moving_left = True
-                            self.left_most_bb = bounding_b
-                            self.left_most_sq = square
-
-                self.display_frame = rotate_frame(self.frame_1, self.r_angle)
+                self.init_task()
 
             # PLAYING
             elif self.game_stage == Stage.PLAYING:
+                self.play_task()
 
-                # Detect squares
-                frame = frame_diff(self.frame_0, self.frame_1)
-                frame = morph_open(frame)
-                frame = rotate_frame(frame, self.r_angle)
-                squares, centres = detect_squares(frame, self.avg_sq_size, True)
-                highest_cnt, bounding_b = get_highest_square(squares)
-
-                # If the new highest contour is one row above increment it
-                if bounding_b:
-                    if self.current_row_height - bounding_b[1] > self.avg_sq_width / 2:
-                        self.current_row_height = bounding_b[1]
-                        self.current_row += 1
-                        self.tower_squares += [self.last_sq]
-                        print("current row, current_height", self.current_row, self.current_row_height)
-
-                    if abs(self.current_row_height - bounding_b[1]) < 0.1 * self.avg_sq_width:
-                        self.last_sq, self.last_bb = highest_cnt, bounding_b
-
-
-
-
-                # Work some shit out
-                if len(self.square_contours) > 3:
-                    last_3 = self.square_contours[-3:]
-                    # TODO do shit here next!
-
-                # Draw onto original image
-                display_frame = rotate_frame(self.frame_0, self.r_angle)
-                display_frame = cv.drawContours(display_frame, self.square_contours, -1, GREEN, 1)
-                display_frame = cv.drawContours(display_frame, self.tower_squares, -1, ORANGE, 5)
-                display_frame = cv.drawContours(display_frame, squares, -1, RED, 4)
-
-
-                self.square_contours += squares
-                self.display_frame = display_frame
-
+            # UPDATE FRAMES
             self.frame_1 = self.frame_0
             ret, self.frame_0 = self.cam.read()
-
+            self.sample_time = time.time()
             if not ret:
                 break
 
+            # DRAW DISPLAY FRAME
             frame = cv.resize(self.display_frame, (0, 0), fx=0.5, fy=0.5)
-            cv.imshow("frame", frame)
-
+            cv.imshow("The gamey boi", frame)
             if cv.waitKey(50) & 0xFF == ord('q'):
                 break
 
+        # TIDY UP ON CAMERA CLOSE
         self.cam.release()
         cv.destroyAllWindows()
+
+    def pregame_task(self):
+        """Handles:
+                Calculating average size of squares to look for
+                TODO: Dynamically calculate angle to rotate screen by
+                TODO: Calculate block colours dynamically maybe
+        """
+
+        frame = frame_diff(self.frame_0, self.frame_1)
+        self.display_frame = morph_open(frame)
+        squares, centres = detect_squares(frame)
+
+        # If we haven't initialised and there are at least 5 contours to init off
+        if not self.avg_sq_width and len(centres) >= 3:
+            avg_sq_width = get_average_box_width(squares)
+            if avg_sq_width != -1:
+                self.avg_sq_size = avg_sq_width * avg_sq_width
+                self.avg_sq_width = avg_sq_width
+
+                # TODO add in working out columns
+
+                # TODO Work out rotation angle dynamically
+                self.r_angle = -2
+
+                # TODO work out block colours dynamically
+                print("average_square_size", self.avg_sq_size)
+
+        # If we have initialised now check if the game has begun
+        elif self.avg_sq_width and check_game_begun(centres, self.avg_sq_width):
+            self.game_stage = Stage.INIT
+            print_divider("STAGE=INIT")
+
+    def init_task(self):
+        """Handles:
+                Calculating the leftmost square possible
+        """
+        frame = frame_diff(self.frame_0, self.frame_1)
+        frame = morph_open(frame)
+        frame = rotate_frame(frame, self.r_angle)
+        squares, centres = detect_squares(frame, self.avg_sq_size, True)
+        square, bounding_b = get_leftmost_square(squares)
+
+        if bounding_b:
+            if not self.left_most_bb:
+                self.left_most_bb = bounding_b
+            else:
+                if bounding_b[0] - self.left_most_bb[0] > self.avg_sq_width / 2:  # Moving Right
+                    if self.is_moving_left:
+                        print("Found leftmost Square!: ", self.left_most_bb)
+                        print_divider("STAGE=PLAYING")
+                        self.current_row_height = self.left_most_bb[1]
+                        self.game_stage = Stage.PLAYING
+                    self.is_moving_left = False
+                elif self.left_most_bb[0] - bounding_b[0] > self.avg_sq_width / 2:  # Moving Left
+                    self.is_moving_left = True
+                    self.left_most_bb = bounding_b
+                    self.left_most_sq = square
+
+        self.display_frame = rotate_frame(self.frame_1, self.r_angle)
+
+    def play_task(self):
+        """Handles:
+                Detecting Layer increment
+                Calculating period of a layer
+        """
+        # Detect squares
+        frame = frame_diff(self.frame_0, self.frame_1)
+        frame = morph_open(frame)
+        frame = rotate_frame(frame, self.r_angle)
+        squares, centres = detect_squares(frame, self.avg_sq_size, True)
+        highest_cnt, highest_bb = get_highest_square(squares)
+
+        if highest_bb:
+            # If the new highest contour is one row above the last square. Increment current row
+            if self.avg_sq_width * 0.5 < self.current_row_height - highest_bb[1] < self.avg_sq_width * 2:
+                self.current_row_height = highest_bb[1]
+                self.current_row += 1
+                self.tower_squares += [self.last_sq]
+                self.first_update_time = None
+                self.row_velocity = None
+                print("current row", self.current_row)
+
+            # The new highest contour is on the same row as the last square
+            elif abs(self.current_row_height - highest_bb[1]) < 0.1 * self.avg_sq_width:
+
+                # The square has moved one block horizontally over since the last frame.
+                if self.last_bb and self.avg_sq_width * 0.5 < abs(self.last_bb[0] - highest_bb[0]) < self.avg_sq_width * 1.5:
+                    if not self.first_update_time:
+                        self.first_update_time = time.time()
+
+                    # We have the time interval between a block moving from one position to the next
+                    elif not self.row_velocity:
+                        self.row_velocity = time.time() - self.first_update_time
+                        current_x = highest_bb[0]
+                        if self.tower_squares:
+                            target_x = get_highest_square(self.tower_squares)[1][0]
+                            block_distance = int(abs(target_x - current_x) // (self.avg_sq_width * 1.2))
+                        else:
+                            target_x = "ANY"
+                            block_distance = 0
+
+                        print_divider("currentX {}\ntargetX {}\nblockDistance {}\nvelocity {:.2f}".format(current_x, target_x, block_distance, self.row_velocity))
+
+
+
+                # Update the last highest square
+                self.last_sq, self.last_bb = highest_cnt, highest_bb
+
+
+        # Draw onto original image
+        display_frame = rotate_frame(self.frame_0, self.r_angle)
+        display_frame = cv.drawContours(display_frame, self.square_contours, -1, GREEN, 1)
+        display_frame = cv.drawContours(display_frame, self.tower_squares, -1, ORANGE, 5)
+        display_frame = cv.drawContours(display_frame, squares, -1, RED, 4)
+
+        self.square_contours += squares
+        self.display_frame = display_frame
