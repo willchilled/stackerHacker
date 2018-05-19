@@ -13,6 +13,7 @@ RED = (0, 0, 255)
 BLUE = (255, 0, 0)
 GREEN = (0, 255, 0)
 ORANGE = (0, 102, 255)
+YELLOW = (0, 255, 255)
 
 
 def angle_cos(p0, p1, p2):
@@ -33,28 +34,30 @@ def find_squares(img, square_area=2000, tight_match=False):
     img = cv.GaussianBlur(img, (5, 5), 0)
     squares = []
     for gray in cv.split(img):
-        for thrs in range(0, 255, 26):
-            if thrs == 0:
-                bin = cv.Canny(gray, 0, 50, apertureSize=5)
-                bin = cv.dilate(bin, None)
-            else:
-                _retval, bin = cv.threshold(gray, thrs, 255, cv.THRESH_BINARY)
-            if tight_match:
-                bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
-            else:
-                bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+        # for thrs in range(0, 255, 26):
+        thrs = 10
+        _retval, bin = cv.threshold(gray, thrs, 255, cv.THRESH_BINARY)
+        if tight_match:
+            bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE)
+        else:
+            bin, contours, _hierarchy = cv.findContours(bin, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
 
-            for cnt in contours:
-                cnt_len = cv.arcLength(cnt, True)
-                cnt = cv.approxPolyDP(cnt, APPROX_POLY_DP_ERROR * cnt_len, True)
-                if is_square(cnt, square_area, tight_match):
-                    cnt = cnt.reshape(-1, 2)
-                    max_cos = np.max([angle_cos(cnt[i], cnt[(i + 1) % 4], cnt[(i + 2) % 4]) for i in range(4)])
-                    if max_cos < 0.1:
-                        squares.append(cnt)
+        for cnt in contours:
+            cnt_len = cv.arcLength(cnt, True)
+
+            # Approximate all contours in the image to reduces set of points of themselves
+            cnt = cv.approxPolyDP(cnt, APPROX_POLY_DP_ERROR * cnt_len, True)
+
+            # Square check - Four points to the contour, convex,
+            if is_square(cnt, square_area, tight_match):
+                cnt = cnt.reshape(-1, 2)
+                max_cos = np.max([angle_cos(cnt[i], cnt[(i + 1) % 4], cnt[(i + 2) % 4]) for i in range(4)])
+                if max_cos < 0.1:
+                    squares.append(cnt)
     return squares
 
 
+# Not used any longer (It sucked)
 def colour_segment(frame):
     mask = cv.inRange(frame, LOWER_BLUE, UPPER_BLUE)
     output = cv.bitwise_and(frame, frame, mask=mask)

@@ -9,6 +9,7 @@ from utils import *
 
 STACKER_COLUMNS = 7
 STACKER_ROWS = 15
+FPS = 30
 
 class StackerController:
 
@@ -33,14 +34,15 @@ class StackerController:
         self.sample_time = time.time()
 
         # Velocity sampling times
-        self.first_update_time = None
-        self.row_velocity = None
+        self.frame_diff = None
+        self.last_frame_sample = None
 
         # Camera Variables
         self.cam = cv.VideoCapture(input_cam)
         ret, self.frame_0 = self.cam.read()
         ret, self.frame_1 = self.cam.read()
         self.display_frame = self.frame_1
+        self.frame_count = 2
 
     def run(self):
         print_divider("STAGE=PREGAME")
@@ -61,7 +63,7 @@ class StackerController:
             # UPDATE FRAMES
             self.frame_1 = self.frame_0
             ret, self.frame_0 = self.cam.read()
-            self.sample_time = time.time()
+            self.frame_count += 1
             if not ret:
                 break
 
@@ -87,7 +89,7 @@ class StackerController:
         squares, centres = detect_squares(frame)
 
         # If we haven't initialised and there are at least 5 contours to init off
-        if not self.avg_sq_width and len(centres) >= 3:
+        if not self.avg_sq_width and len(centres) >= 5:
             avg_sq_width = get_average_box_width(squares)
             if avg_sq_width != -1:
                 self.avg_sq_size = avg_sq_width * avg_sq_width
@@ -101,10 +103,19 @@ class StackerController:
                 # TODO work out block colours dynamically
                 print("average_square_size", self.avg_sq_size)
 
-        # If we have initialised now check if the game has begun
-        elif self.avg_sq_width and check_game_begun(centres, self.avg_sq_width):
-            self.game_stage = Stage.INIT
-            print_divider("STAGE=INIT")
+        if self.avg_sq_width and len(centres) == 1:
+            bounging_box = cv.boundingRect(squares[0])
+            if not self.last_bb:
+                self.last_sq, self.last_bb = squares[0], bounging_box
+            else:
+                # On the same row
+                if abs(bounging_box[1] - self.last_bb[1]) < 0.1 * self.avg_sq_width:
+                    # Moved one column
+                    self.game_stage = Stage.INIT
+                    print_divider("STAGE=INIT")
+                    self.last_bb, self.last_sq = None, None
+
+                self.last_sq, self.last_bb = squares[0], bounging_box
 
     def init_task(self):
         """Handles:
@@ -152,8 +163,8 @@ class StackerController:
                 self.current_row_height = highest_bb[1]
                 self.current_row += 1
                 self.tower_squares += [self.last_sq]
-                self.first_update_time = None
-                self.row_velocity = None
+                self.last_frame_sample = None
+                self.frame_diff = None
                 print("current row", self.current_row)
 
             # The new highest contour is on the same row as the last square
@@ -161,12 +172,12 @@ class StackerController:
 
                 # The square has moved one block horizontally over since the last frame.
                 if self.last_bb and self.avg_sq_width * 0.5 < abs(self.last_bb[0] - highest_bb[0]) < self.avg_sq_width * 1.5:
-                    if not self.first_update_time:
-                        self.first_update_time = time.time()
+                    if not self.last_frame_sample:
+                        self.last_frame_sample = self.frame_count
 
                     # We have the time interval between a block moving from one position to the next
-                    elif not self.row_velocity:
-                        self.row_velocity = time.time() - self.first_update_time
+                    elif not self.frame_diff:
+                        self.frame_diff = self.frame_count - self.last_frame_sample
                         current_x = highest_bb[0]
                         if self.tower_squares:
                             target_x = get_highest_square(self.tower_squares)[1][0]
@@ -175,7 +186,7 @@ class StackerController:
                             target_x = "ANY"
                             block_distance = 0
 
-                        print_divider("currentX {}\ntargetX {}\nblockDistance {}\nvelocity {:.2f}".format(current_x, target_x, block_distance, self.row_velocity))
+                        print_divider("currentX {}\ntargetX {}\nblockDistance {}\nBlock Speed {:.1f}".format(current_x, target_x, block_distance, 1 / (self.frame_diff / FPS)))
 
 
 
